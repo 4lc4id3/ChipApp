@@ -1,22 +1,74 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Alert, Image, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+
+type ExpenseCategory = 'necesario' | 'gusto' | 'inversion';
+
+type Nivel = {
+  nombre: string;
+  min: number;
+  max: number;
+};
+
+const NIVELES: Nivel[] = [
+  { nombre: 'Nivel Hierro', min: 0, max: 100 },
+  { nombre: 'Nivel Bronce', min: 101, max: 300 },
+  { nombre: 'Nivel Plata', min: 301, max: 600 }
+];
+
+const XP_POR_CATEGORIA: Record<ExpenseCategory, number> = {
+  necesario: 20,
+  gusto: -20,
+  inversion: 10
+};
+
+const FRASES_CHIP: Record<ExpenseCategory, string> = {
+  necesario: '¡Bien ahí! Eso sí es usar bien la plata.',
+  gusto: '¿En serio? ¿Un dulce más? ¡Tu billetera está llorando!',
+  inversion: '¡Buena jugada! Pensar a futuro también suma.'
+};
+
+const BOTONES_CATEGORIA: { key: ExpenseCategory; label: string }[] = [
+  { key: 'necesario', label: 'Era Necesario ✅' },
+  { key: 'gusto', label: 'Gusto/Deseo 🍭' },
+  { key: 'inversion', label: 'Inversión/Otro 📈' }
+];
 
 export default function HomeScreen() {
   const [gastoTotal, setGastoTotal] = useState(0);
+  const [xpTotal, setXpTotal] = useState(0);
   const [sueldoMensual, setSueldoMensual] = useState('');
   const [presupuestoDiario, setPresupuestoDiario] = useState('');
   const [setupCompleto, setSetupCompleto] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
+  const [nivelModalVisible, setNivelModalVisible] = useState(false);
   const [montoGasto, setMontoGasto] = useState('');
   const [descripcionGasto, setDescripcionGasto] = useState('');
-  const [ultimoGasto, setUltimoGasto] = useState<{ monto: number; descripcion: string } | null>(null);
+  const [chipFrase, setChipFrase] = useState('Registra tu primer gasto para ver cómo te va hoy.');
+  const [ultimoGasto, setUltimoGasto] = useState<{
+    monto: number;
+    descripcion: string;
+    categoria: ExpenseCategory;
+    xpDelta: number;
+  } | null>(null);
 
   const parseCurrencyInput = (value: string) => {
     const onlyDigits = value.replace(/\D/g, '');
     return Number(onlyDigits);
   };
 
-  const handleGuardarGasto = () => {
+  const nivelActual = useMemo(() => {
+    return NIVELES.find((nivel) => xpTotal >= nivel.min && xpTotal <= nivel.max) ?? NIVELES[NIVELES.length - 1];
+  }, [xpTotal]);
+
+  const indiceNivelActual = NIVELES.findIndex((nivel) => nivel.nombre === nivelActual.nombre);
+  const siguienteNivel = indiceNivelActual >= 0 && indiceNivelActual < NIVELES.length - 1 ? NIVELES[indiceNivelActual + 1] : null;
+
+  const rangoNivel = Math.max(nivelActual.max - nivelActual.min, 1);
+  const xpEnNivel = Math.max(Math.min(xpTotal, nivelActual.max) - nivelActual.min, 0);
+  const porcentajeXpNivel = Math.min((xpEnNivel / rangoNivel) * 100, 100);
+  const xpFaltanteSiguienteNivel = siguienteNivel ? Math.max(siguienteNivel.min - xpTotal, 0) : 0;
+
+  const handleGuardarGasto = (categoria: ExpenseCategory) => {
     const monto = parseCurrencyInput(montoGasto);
     const descripcion = descripcionGasto.trim();
 
@@ -25,8 +77,12 @@ export default function HomeScreen() {
       return;
     }
 
+    const xpDelta = XP_POR_CATEGORIA[categoria];
+
     setGastoTotal((prevTotal) => prevTotal + monto);
-    setUltimoGasto({ monto, descripcion });
+    setXpTotal((prevXp) => Math.max(prevXp + xpDelta, 0));
+    setUltimoGasto({ monto, descripcion, categoria, xpDelta });
+    setChipFrase(FRASES_CHIP[categoria]);
     setMontoGasto('');
     setDescripcionGasto('');
     setModalVisible(false);
@@ -85,19 +141,33 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.levelText}>NIVEL HIERRO</Text>
+      <Text style={styles.levelText}>{nivelActual.nombre}</Text>
+      <View style={styles.xpBarWrapper}>
+        <Text style={styles.xpLabel}>XP: {xpTotal}</Text>
+        <View style={styles.xpTrack}>
+          <View style={[styles.xpFill, { width: `${porcentajeXpNivel}%` }]} />
+        </View>
+      </View>
+
+      <Pressable style={styles.progressButton} onPress={() => setNivelModalVisible(true)}>
+        <Text style={styles.progressButtonText}>Ver Progreso</Text>
+      </Pressable>
+
       <View style={styles.card}>
         <Image
           source={require('../../assets/images/chip_pobre.png')}
           style={styles.image}
         />
-        <Text style={styles.title}>Chip está decepcionado...</Text>
-        <Text style={styles.subtitle}>¿En serio gastaste en eso?</Text>
+        <Text style={styles.title}>Chip está atento a tus decisiones</Text>
+        <Text style={styles.subtitle}>Cada gasto cambia tu progreso</Text>
         <Text style={styles.gastoText}>Gasto Total: ${gastoTotal.toLocaleString('es-CL')}</Text>
-        <Text style={styles.dynamicText}>Chip dice: Ya llevas ${gastoTotal.toLocaleString('es-CL')} gastados...</Text>
+        <Text style={styles.dynamicText}>Chip dice: {chipFrase}</Text>
         {ultimoGasto ? (
           <Text style={styles.ultimoGastoText}>
-            Último gasto: ${ultimoGasto.monto.toLocaleString('es-CL')} en {ultimoGasto.descripcion}
+            Último gasto: ${ultimoGasto.monto.toLocaleString('es-CL')} en {ultimoGasto.descripcion} ({ultimoGasto.categoria}) · XP{' '}
+            {ultimoGasto.xpDelta > 0 ? '+' : ''}
+            {ultimoGasto.xpDelta}
+            {ultimoGasto.categoria === 'gusto' ? ' (incluye Bono de Honestidad +10 XP)' : ''}
           </Text>
         ) : null}
 
@@ -140,14 +210,52 @@ export default function HomeScreen() {
                 style={styles.input}
               />
 
-              <View style={styles.modalButtonsRow}>
-                <Pressable style={[styles.modalButton, styles.cancelButton]} onPress={() => setModalVisible(false)}>
-                  <Text style={styles.modalButtonText}>Cancelar</Text>
-                </Pressable>
-                <Pressable style={[styles.modalButton, styles.saveButton]} onPress={handleGuardarGasto}>
-                  <Text style={styles.modalButtonText}>Guardar</Text>
-                </Pressable>
+              <Text style={styles.formLabel}>Clasifica este gasto</Text>
+              <View style={styles.categoryButtonsWrapper}>
+                {BOTONES_CATEGORIA.map((categoria) => (
+                  <Pressable
+                    key={categoria.key}
+                    style={[styles.categoryButton, styles.saveButton]}
+                    onPress={() => handleGuardarGasto(categoria.key)}>
+                    <Text style={styles.modalButtonText}>{categoria.label}</Text>
+                  </Pressable>
+                ))}
               </View>
+
+              <Pressable style={[styles.modalButton, styles.cancelButton]} onPress={() => setModalVisible(false)}>
+                <Text style={styles.modalButtonText}>Cancelar</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          transparent
+          animationType="fade"
+          visible={nivelModalVisible}
+          onRequestClose={() => setNivelModalVisible(false)}>
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Progreso de niveles</Text>
+
+              {NIVELES.map((nivel) => (
+                <View key={nivel.nombre} style={styles.levelRow}>
+                  <Text style={styles.levelRowTitle}>{nivel.nombre}</Text>
+                  <Text style={styles.levelRowRange}>
+                    {nivel.min} - {nivel.max} XP
+                  </Text>
+                </View>
+              ))}
+
+              <Text style={styles.nextLevelText}>
+                {siguienteNivel
+                  ? `Te faltan ${xpFaltanteSiguienteNivel} XP para llegar a ${siguienteNivel.nombre}.`
+                  : '¡Llegaste al nivel máximo disponible por ahora!'}
+              </Text>
+
+              <Pressable style={[styles.modalButton, styles.cancelButton]} onPress={() => setNivelModalVisible(false)}>
+                <Text style={styles.modalButtonText}>Cerrar</Text>
+              </Pressable>
             </View>
           </View>
         </Modal>
@@ -187,7 +295,25 @@ const styles = StyleSheet.create({
     alignItems: 'center'
   },
   startButtonText: { color: '#FFF', fontSize: 16, fontWeight: '700' },
-  levelText: { color: '#FF8C00', fontWeight: 'bold', fontSize: 20, marginBottom: 20 },
+  levelText: { color: '#FF8C00', fontWeight: 'bold', fontSize: 22, marginBottom: 8 },
+  xpBarWrapper: { width: '100%', marginBottom: 12 },
+  xpLabel: { color: '#FFF', fontSize: 13, marginBottom: 6, textAlign: 'center' },
+  xpTrack: {
+    width: '100%',
+    height: 10,
+    borderRadius: 999,
+    backgroundColor: '#2B2B2B',
+    overflow: 'hidden'
+  },
+  xpFill: { height: '100%', backgroundColor: '#FFB347', borderRadius: 999 },
+  progressButton: {
+    backgroundColor: '#2E2E2E',
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    marginBottom: 14
+  },
+  progressButtonText: { color: '#FFF', fontWeight: '600' },
   card: { width: '100%', backgroundColor: '#1E1E1E', padding: 20, borderRadius: 20, alignItems: 'center' },
   image: { width: 250, height: 250, marginBottom: 20 },
   title: { color: '#FFF', fontSize: 18, fontWeight: 'bold' },
@@ -235,13 +361,18 @@ const styles = StyleSheet.create({
     borderColor: '#2F2F2F'
   },
   modalTitle: { color: '#FFF', fontSize: 18, fontWeight: '700', marginBottom: 14 },
-  modalButtonsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 10
+  categoryButtonsWrapper: {
+    gap: 10,
+    marginBottom: 12
+  },
+  categoryButton: {
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    alignItems: 'center'
   },
   modalButton: {
-    flex: 1,
+    width: '100%',
     borderRadius: 12,
     paddingVertical: 12,
     alignItems: 'center'
@@ -252,5 +383,13 @@ const styles = StyleSheet.create({
   saveButton: {
     backgroundColor: '#FF8C00'
   },
-  modalButtonText: { color: '#FFF', fontWeight: '700' }
+  modalButtonText: { color: '#FFF', fontWeight: '700' },
+  levelRow: {
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#2C2C2C'
+  },
+  levelRowTitle: { color: '#FFF', fontSize: 15, fontWeight: '600' },
+  levelRowRange: { color: '#BDBDBD', marginTop: 4 },
+  nextLevelText: { color: '#FFCB7D', marginVertical: 14, textAlign: 'center' }
 });
