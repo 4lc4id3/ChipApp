@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import AsyncStorage from '../../utils/asyncStorage';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Image, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 type ExpenseCategory = 'necesario' | 'gusto' | 'inversion';
@@ -33,6 +34,18 @@ const BOTONES_CATEGORIA: { key: ExpenseCategory; label: string }[] = [
   { key: 'inversion', label: 'Inversión/Otro 📈' }
 ];
 
+const STORAGE_KEYS = {
+  sueldoMensual: 'chipapp:sueldoMensual',
+  presupuestoDiario: 'chipapp:presupuestoDiario',
+  gastoTotal: 'chipapp:gastoTotal',
+  xpTotal: 'chipapp:xpTotal',
+  nivelNombre: 'chipapp:nivelNombre'
+} as const;
+
+const clamp = (value: number, min: number, max: number) => {
+  return Math.min(Math.max(value, min), max);
+};
+
 export default function HomeScreen() {
   const [gastoTotal, setGastoTotal] = useState(0);
   const [xpTotal, setXpTotal] = useState(0);
@@ -44,6 +57,8 @@ export default function HomeScreen() {
   const [montoGasto, setMontoGasto] = useState('');
   const [descripcionGasto, setDescripcionGasto] = useState('');
   const [chipFrase, setChipFrase] = useState('Registra tu primer gasto para ver cómo te va hoy.');
+  const [xpFeedback, setXpFeedback] = useState('');
+  const [datosCargados, setDatosCargados] = useState(false);
   const [ultimoGasto, setUltimoGasto] = useState<{
     monto: number;
     descripcion: string;
@@ -60,12 +75,80 @@ export default function HomeScreen() {
     return NIVELES.find((nivel) => xpTotal >= nivel.min && xpTotal <= nivel.max) ?? NIVELES[NIVELES.length - 1];
   }, [xpTotal]);
 
+  useEffect(() => {
+    const cargarDatos = async () => {
+      try {
+        const entries = await AsyncStorage.multiGet(Object.values(STORAGE_KEYS));
+        const values = Object.fromEntries(entries);
+
+        const sueldoGuardado = values[STORAGE_KEYS.sueldoMensual];
+        const presupuestoGuardado = values[STORAGE_KEYS.presupuestoDiario];
+        const gastoGuardado = values[STORAGE_KEYS.gastoTotal];
+        const xpGuardada = values[STORAGE_KEYS.xpTotal];
+
+        if (sueldoGuardado) {
+          setSueldoMensual(sueldoGuardado);
+        }
+
+        if (presupuestoGuardado) {
+          setPresupuestoDiario(presupuestoGuardado);
+        }
+
+        if (gastoGuardado) {
+          setGastoTotal(Number(gastoGuardado) || 0);
+        }
+
+        if (xpGuardada) {
+          setXpTotal(Number(xpGuardada) || 0);
+        }
+
+        if (sueldoGuardado && presupuestoGuardado) {
+          setSetupCompleto(true);
+        }
+      } catch (error) {
+        console.error('Error al cargar datos locales', error);
+      } finally {
+        setDatosCargados(true);
+      }
+    };
+
+    cargarDatos();
+  }, []);
+
+  useEffect(() => {
+    if (!datosCargados) {
+      return;
+    }
+
+    AsyncStorage.multiSet([
+      [STORAGE_KEYS.sueldoMensual, sueldoMensual],
+      [STORAGE_KEYS.presupuestoDiario, presupuestoDiario],
+      [STORAGE_KEYS.gastoTotal, String(gastoTotal)],
+      [STORAGE_KEYS.xpTotal, String(xpTotal)],
+      [STORAGE_KEYS.nivelNombre, nivelActual.nombre]
+    ]).catch((error) => {
+      console.error('Error al guardar datos locales', error);
+    });
+  }, [datosCargados, sueldoMensual, presupuestoDiario, gastoTotal, xpTotal, nivelActual.nombre]);
+
+  useEffect(() => {
+    if (!xpFeedback) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setXpFeedback('');
+    }, 1200);
+
+    return () => clearTimeout(timer);
+  }, [xpFeedback]);
+
   const indiceNivelActual = NIVELES.findIndex((nivel) => nivel.nombre === nivelActual.nombre);
   const siguienteNivel = indiceNivelActual >= 0 && indiceNivelActual < NIVELES.length - 1 ? NIVELES[indiceNivelActual + 1] : null;
 
   const rangoNivel = Math.max(nivelActual.max - nivelActual.min, 1);
   const xpEnNivel = Math.max(Math.min(xpTotal, nivelActual.max) - nivelActual.min, 0);
-  const porcentajeXpNivel = Math.min((xpEnNivel / rangoNivel) * 100, 100);
+  const porcentajeXpNivel = clamp((xpEnNivel / rangoNivel) * 100, 0, 100);
   const xpFaltanteSiguienteNivel = siguienteNivel ? Math.max(siguienteNivel.min - xpTotal, 0) : 0;
 
   const handleGuardarGasto = (categoria: ExpenseCategory) => {
@@ -77,12 +160,27 @@ export default function HomeScreen() {
       return;
     }
 
-    const xpDelta = XP_POR_CATEGORIA[categoria];
+    const xpDeltaBase = XP_POR_CATEGORIA[categoria];
+    const bonoHonestidad = categoria === 'gusto' ? 10 : 0;
+    const xpDeltaFinal = xpDeltaBase + bonoHonestidad;
+    const nuevoGastoTotal = gastoTotal + monto;
+    const xpTrasResta = clamp(xpTotal + xpDeltaBase, 0, Number.MAX_SAFE_INTEGER);
+    const nuevoXpTotal = clamp(xpTrasResta + bonoHonestidad, 0, Number.MAX_SAFE_INTEGER);
 
-    setGastoTotal((prevTotal) => prevTotal + monto);
-    setXpTotal((prevXp) => Math.max(prevXp + xpDelta, 0));
-    setUltimoGasto({ monto, descripcion, categoria, xpDelta });
+    setGastoTotal(nuevoGastoTotal);
+    setXpTotal(nuevoXpTotal);
+    setUltimoGasto({ monto, descripcion, categoria, xpDelta: xpDeltaFinal });
+    setXpFeedback(`${xpDeltaFinal >= 0 ? '+' : ''}${xpDeltaFinal} XP`);
     setChipFrase(FRASES_CHIP[categoria]);
+
+    AsyncStorage.multiSet([
+      [STORAGE_KEYS.gastoTotal, String(nuevoGastoTotal)],
+      [STORAGE_KEYS.xpTotal, String(nuevoXpTotal)],
+      [STORAGE_KEYS.nivelNombre, (NIVELES.find((nivel) => nuevoXpTotal >= nivel.min && nuevoXpTotal <= nivel.max) ?? NIVELES[NIVELES.length - 1]).nombre]
+    ]).catch((error) => {
+      console.error('Error al persistir gasto y XP', error);
+    });
+
     setMontoGasto('');
     setDescripcionGasto('');
     setModalVisible(false);
@@ -100,6 +198,13 @@ export default function HomeScreen() {
     setSueldoMensual(String(sueldo));
     setPresupuestoDiario(String(presupuesto));
     setSetupCompleto(true);
+
+    AsyncStorage.multiSet([
+      [STORAGE_KEYS.sueldoMensual, String(sueldo)],
+      [STORAGE_KEYS.presupuestoDiario, String(presupuesto)]
+    ]).catch((error) => {
+      console.error('Error al persistir configuración inicial', error);
+    });
   };
 
   const presupuestoDiarioNumero = parseCurrencyInput(presupuestoDiario) || 0;
@@ -147,6 +252,7 @@ export default function HomeScreen() {
         <View style={styles.xpTrack}>
           <View style={[styles.xpFill, { width: `${porcentajeXpNivel}%` }]} />
         </View>
+        {xpFeedback ? <Text style={styles.xpFeedback}>{xpFeedback}</Text> : null}
       </View>
 
       <Pressable style={styles.progressButton} onPress={() => setNivelModalVisible(true)}>
@@ -306,6 +412,13 @@ const styles = StyleSheet.create({
     overflow: 'hidden'
   },
   xpFill: { height: '100%', backgroundColor: '#FFB347', borderRadius: 999 },
+  xpFeedback: {
+    marginTop: 8,
+    color: '#FFCB7D',
+    fontSize: 13,
+    textAlign: 'center',
+    fontWeight: '700'
+  },
   progressButton: {
     backgroundColor: '#2E2E2E',
     borderRadius: 10,
