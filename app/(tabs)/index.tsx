@@ -1,4 +1,4 @@
-import AsyncStorage from '../../utils/asyncStorage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Image, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
@@ -35,11 +35,10 @@ const BOTONES_CATEGORIA: { key: ExpenseCategory; label: string }[] = [
 ];
 
 const STORAGE_KEYS = {
-  sueldoMensual: 'chipapp:sueldoMensual',
-  presupuestoDiario: 'chipapp:presupuestoDiario',
-  gastoTotal: 'chipapp:gastoTotal',
-  xpTotal: 'chipapp:xpTotal',
-  nivelNombre: 'chipapp:nivelNombre'
+  sueldoMensual: 'sueldo',
+  presupuestoDiario: 'presupuesto',
+  gastoTotal: 'gastos',
+  xpTotal: 'xp'
 } as const;
 
 const clamp = (value: number, min: number, max: number) => {
@@ -58,7 +57,7 @@ export default function HomeScreen() {
   const [descripcionGasto, setDescripcionGasto] = useState('');
   const [chipFrase, setChipFrase] = useState('Registra tu primer gasto para ver cómo te va hoy.');
   const [xpFeedback, setXpFeedback] = useState('');
-  const [datosCargados, setDatosCargados] = useState(false);
+  const [isReady, setIsReady] = useState(false);
   const [ultimoGasto, setUltimoGasto] = useState<{
     monto: number;
     descripcion: string;
@@ -86,50 +85,31 @@ export default function HomeScreen() {
         const gastoGuardado = values[STORAGE_KEYS.gastoTotal];
         const xpGuardada = values[STORAGE_KEYS.xpTotal];
 
-        if (sueldoGuardado) {
-          setSueldoMensual(sueldoGuardado);
-        }
+        const sueldoParseado = sueldoGuardado ? JSON.parse(sueldoGuardado) : 0;
+        const presupuestoParseado = presupuestoGuardado ? JSON.parse(presupuestoGuardado) : 0;
+        const gastoParseado = gastoGuardado ? JSON.parse(gastoGuardado) : 0;
+        const xpParseada = xpGuardada ? JSON.parse(xpGuardada) : 0;
 
-        if (presupuestoGuardado) {
-          setPresupuestoDiario(presupuestoGuardado);
-        }
-
-        if (gastoGuardado) {
-          setGastoTotal(Number(gastoGuardado) || 0);
-        }
-
-        if (xpGuardada) {
-          setXpTotal(Number(xpGuardada) || 0);
-        }
-
-        if (sueldoGuardado && presupuestoGuardado) {
+        if (Number(sueldoParseado) > 0) {
+          setSueldoMensual(String(sueldoParseado));
           setSetupCompleto(true);
         }
+
+        if (Number(presupuestoParseado) > 0) {
+          setPresupuestoDiario(String(presupuestoParseado));
+        }
+
+        setGastoTotal(Number(gastoParseado) || 0);
+        setXpTotal(Number(xpParseada) || 0);
       } catch (error) {
         console.error('Error al cargar datos locales', error);
       } finally {
-        setDatosCargados(true);
+        setIsReady(true);
       }
     };
 
     cargarDatos();
   }, []);
-
-  useEffect(() => {
-    if (!datosCargados) {
-      return;
-    }
-
-    AsyncStorage.multiSet([
-      [STORAGE_KEYS.sueldoMensual, sueldoMensual],
-      [STORAGE_KEYS.presupuestoDiario, presupuestoDiario],
-      [STORAGE_KEYS.gastoTotal, String(gastoTotal)],
-      [STORAGE_KEYS.xpTotal, String(xpTotal)],
-      [STORAGE_KEYS.nivelNombre, nivelActual.nombre]
-    ]).catch((error) => {
-      console.error('Error al guardar datos locales', error);
-    });
-  }, [datosCargados, sueldoMensual, presupuestoDiario, gastoTotal, xpTotal, nivelActual.nombre]);
 
   useEffect(() => {
     if (!xpFeedback) {
@@ -174,9 +154,8 @@ export default function HomeScreen() {
     setChipFrase(FRASES_CHIP[categoria]);
 
     AsyncStorage.multiSet([
-      [STORAGE_KEYS.gastoTotal, String(nuevoGastoTotal)],
-      [STORAGE_KEYS.xpTotal, String(nuevoXpTotal)],
-      [STORAGE_KEYS.nivelNombre, (NIVELES.find((nivel) => nuevoXpTotal >= nivel.min && nuevoXpTotal <= nivel.max) ?? NIVELES[NIVELES.length - 1]).nombre]
+      [STORAGE_KEYS.gastoTotal, JSON.stringify(nuevoGastoTotal)],
+      [STORAGE_KEYS.xpTotal, JSON.stringify(nuevoXpTotal)]
     ]).catch((error) => {
       console.error('Error al persistir gasto y XP', error);
     });
@@ -200,8 +179,8 @@ export default function HomeScreen() {
     setSetupCompleto(true);
 
     AsyncStorage.multiSet([
-      [STORAGE_KEYS.sueldoMensual, String(sueldo)],
-      [STORAGE_KEYS.presupuestoDiario, String(presupuesto)]
+      [STORAGE_KEYS.sueldoMensual, JSON.stringify(sueldo)],
+      [STORAGE_KEYS.presupuestoDiario, JSON.stringify(presupuesto)]
     ]).catch((error) => {
       console.error('Error al persistir configuración inicial', error);
     });
@@ -210,6 +189,14 @@ export default function HomeScreen() {
   const presupuestoDiarioNumero = parseCurrencyInput(presupuestoDiario) || 0;
   const porcentajeGastadoReal = presupuestoDiarioNumero > 0 ? (gastoTotal / presupuestoDiarioNumero) * 100 : 0;
   const porcentajeGastadoBarra = Math.min(porcentajeGastadoReal, 100);
+
+  if (!isReady) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.loadingText}>Chip está recuperando tus finanzas...</Text>
+      </View>
+    );
+  }
 
   if (!setupCompleto) {
     return (
@@ -401,6 +388,7 @@ const styles = StyleSheet.create({
     alignItems: 'center'
   },
   startButtonText: { color: '#FFF', fontSize: 16, fontWeight: '700' },
+  loadingText: { color: '#FFF', fontSize: 18, fontWeight: '600', textAlign: 'center' },
   levelText: { color: '#FF8C00', fontWeight: 'bold', fontSize: 22, marginBottom: 8 },
   xpBarWrapper: { width: '100%', marginBottom: 12 },
   xpLabel: { color: '#FFF', fontSize: 13, marginBottom: 6, textAlign: 'center' },
