@@ -11,20 +11,22 @@ type Nivel = {
 };
 
 const NIVELES: Nivel[] = [
-  { nombre: 'Nivel Hierro', min: 0, max: 100 },
-  { nombre: 'Nivel Bronce', min: 101, max: 300 },
-  { nombre: 'Nivel Plata', min: 301, max: 600 }
+  { nombre: 'Nivel Hierro', min: 0, max: 99 },
+  { nombre: 'Nivel Bronce', min: 100, max: 199 },
+  { nombre: 'Nivel Plata', min: 200, max: 299 }
 ];
+
+const XP_POR_NIVEL = 100;
 
 const XP_POR_CATEGORIA: Record<ExpenseCategory, number> = {
   necesario: 20,
-  gusto: -20,
+  gusto: -30,
   inversion: 10
 };
 
 const FRASES_CHIP: Record<ExpenseCategory, string> = {
-  necesario: '¡Bien ahí! Eso sí es usar bien la plata.',
-  gusto: '¿En serio? ¿Un dulce más? ¡Tu billetera está llorando!',
+  necesario: '¡Seco! Fue un gasto necesario, tomaste una decisión inteligente.',
+  gusto: 'Fue un gusto... gracias por ser honesto. ¡Chip igual te está mirando de cerca!',
   inversion: '¡Buena jugada! Pensar a futuro también suma.'
 };
 
@@ -36,8 +38,8 @@ const BOTONES_CATEGORIA: { key: ExpenseCategory; label: string }[] = [
 
 const STORAGE_KEYS = {
   sueldoMensual: 'sueldo',
-  presupuestoDiario: 'presupuesto',
-  gastoTotal: 'gastos',
+  presupuestoDiario: 'presupuestoDiario',
+  gastoTotal: 'gastoTotal',
   xpTotal: 'xp'
 } as const;
 
@@ -70,9 +72,11 @@ export default function HomeScreen() {
     return Number(onlyDigits);
   };
 
+  const nivelActualNumero = Math.floor(xpTotal / XP_POR_NIVEL) + 1;
+
   const nivelActual = useMemo(() => {
-    return NIVELES.find((nivel) => xpTotal >= nivel.min && xpTotal <= nivel.max) ?? NIVELES[NIVELES.length - 1];
-  }, [xpTotal]);
+    return NIVELES.find((nivel) => xpTotal >= nivel.min && xpTotal <= nivel.max) ?? { nombre: `Nivel ${nivelActualNumero}`, min: 0, max: 0 };
+  }, [xpTotal, nivelActualNumero]);
 
   useEffect(() => {
     const cargarDatos = async () => {
@@ -112,6 +116,27 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
+    if (!isReady) {
+      return;
+    }
+
+    const persistirDatos = async () => {
+      try {
+        await AsyncStorage.multiSet([
+          [STORAGE_KEYS.sueldoMensual, JSON.stringify(parseCurrencyInput(sueldoMensual) || 0)],
+          [STORAGE_KEYS.presupuestoDiario, JSON.stringify(parseCurrencyInput(presupuestoDiario) || 0)],
+          [STORAGE_KEYS.gastoTotal, JSON.stringify(gastoTotal)],
+          [STORAGE_KEYS.xpTotal, JSON.stringify(xpTotal)]
+        ]);
+      } catch (error) {
+        console.error('Error al persistir datos locales', error);
+      }
+    };
+
+    persistirDatos();
+  }, [gastoTotal, isReady, presupuestoDiario, sueldoMensual, xpTotal]);
+
+  useEffect(() => {
     if (!xpFeedback) {
       return;
     }
@@ -123,13 +148,9 @@ export default function HomeScreen() {
     return () => clearTimeout(timer);
   }, [xpFeedback]);
 
-  const indiceNivelActual = NIVELES.findIndex((nivel) => nivel.nombre === nivelActual.nombre);
-  const siguienteNivel = indiceNivelActual >= 0 && indiceNivelActual < NIVELES.length - 1 ? NIVELES[indiceNivelActual + 1] : null;
-
-  const rangoNivel = Math.max(nivelActual.max - nivelActual.min, 1);
-  const xpEnNivel = Math.max(Math.min(xpTotal, nivelActual.max) - nivelActual.min, 0);
-  const porcentajeXpNivel = clamp((xpEnNivel / rangoNivel) * 100, 0, 100);
-  const xpFaltanteSiguienteNivel = siguienteNivel ? Math.max(siguienteNivel.min - xpTotal, 0) : 0;
+  const xpEnNivel = ((xpTotal % XP_POR_NIVEL) + XP_POR_NIVEL) % XP_POR_NIVEL;
+  const porcentajeXpNivel = clamp((xpEnNivel / XP_POR_NIVEL) * 100, 0, 100);
+  const xpFaltanteSiguienteNivel = XP_POR_NIVEL - xpEnNivel;
 
   const handleGuardarGasto = (categoria: ExpenseCategory) => {
     const monto = parseCurrencyInput(montoGasto);
@@ -153,13 +174,6 @@ export default function HomeScreen() {
     setXpFeedback(`${xpDeltaFinal >= 0 ? '+' : ''}${xpDeltaFinal} XP`);
     setChipFrase(FRASES_CHIP[categoria]);
 
-    AsyncStorage.multiSet([
-      [STORAGE_KEYS.gastoTotal, JSON.stringify(nuevoGastoTotal)],
-      [STORAGE_KEYS.xpTotal, JSON.stringify(nuevoXpTotal)]
-    ]).catch((error) => {
-      console.error('Error al persistir gasto y XP', error);
-    });
-
     setMontoGasto('');
     setDescripcionGasto('');
     setModalVisible(false);
@@ -178,12 +192,6 @@ export default function HomeScreen() {
     setPresupuestoDiario(String(presupuesto));
     setSetupCompleto(true);
 
-    AsyncStorage.multiSet([
-      [STORAGE_KEYS.sueldoMensual, JSON.stringify(sueldo)],
-      [STORAGE_KEYS.presupuestoDiario, JSON.stringify(presupuesto)]
-    ]).catch((error) => {
-      console.error('Error al persistir configuración inicial', error);
-    });
   };
 
   const presupuestoDiarioNumero = parseCurrencyInput(presupuestoDiario) || 0;
@@ -193,7 +201,7 @@ export default function HomeScreen() {
   if (!isReady) {
     return (
       <View style={styles.container}>
-        <Text style={styles.loadingText}>Chip está recuperando tus finanzas...</Text>
+        <Text style={styles.loadingText}>Chip está recordando tus gastos...</Text>
       </View>
     );
   }
@@ -233,7 +241,7 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.levelText}>{nivelActual.nombre}</Text>
+      <Text style={styles.levelText}>{xpTotal < 300 ? nivelActual.nombre : `Nivel ${nivelActualNumero}`}</Text>
       <View style={styles.xpBarWrapper}>
         <Text style={styles.xpLabel}>XP: {xpTotal}</Text>
         <View style={styles.xpTrack}>
@@ -250,6 +258,7 @@ export default function HomeScreen() {
         <Image
           source={require('../../assets/images/chip_pobre.png')}
           style={styles.image}
+          resizeMode="contain"
         />
         <Text style={styles.title}>Chip está atento a tus decisiones</Text>
         <Text style={styles.subtitle}>Cada gasto cambia tu progreso</Text>
@@ -341,9 +350,7 @@ export default function HomeScreen() {
               ))}
 
               <Text style={styles.nextLevelText}>
-                {siguienteNivel
-                  ? `Te faltan ${xpFaltanteSiguienteNivel} XP para llegar a ${siguienteNivel.nombre}.`
-                  : '¡Llegaste al nivel máximo disponible por ahora!'}
+                Te faltan {xpFaltanteSiguienteNivel} XP para subir al siguiente nivel.
               </Text>
 
               <Pressable style={[styles.modalButton, styles.cancelButton]} onPress={() => setNivelModalVisible(false)}>
@@ -416,7 +423,7 @@ const styles = StyleSheet.create({
   },
   progressButtonText: { color: '#FFF', fontWeight: '600' },
   card: { width: '100%', backgroundColor: '#1E1E1E', padding: 20, borderRadius: 20, alignItems: 'center' },
-  image: { width: 250, height: 250, marginBottom: 20 },
+  image: { width: 220, height: 220, marginBottom: 20, alignSelf: 'center' },
   title: { color: '#FFF', fontSize: 18, fontWeight: 'bold' },
   subtitle: { color: '#888', fontSize: 14, marginTop: 10 },
   gastoText: { color: '#FFF', fontSize: 16, marginTop: 16, fontWeight: '600' },
